@@ -22,26 +22,18 @@ HALF_TIME       EQU     .9 ; 900/100          ;Number of timer counts per half b
 HE_PORT			EQU PORTA
 HE_PBIT			EQU 0
 
-HE_ADDRESS		EQU 	0x0125BE6		; a 26 bit address
+HE_ADDRESS		EQU 	0x1C0D8		; same as my remote controle (a 20 bit address)
 
-HE_ADDR_0		EQU		(HE_ADDRESS >> .18) & 0xFF;
-HE_ADDR_1		EQU		(HE_ADDRESS >> .10) & 0xFF;
-HE_ADDR_2		EQU		(HE_ADDRESS >> .2)  & 0xFF;
-HE_ADDR_3		EQU		(HE_ADDRESS << .6)  & 0xFF;
+HE_ADDR_0		EQU		(HE_ADDRESS >> .12) & 0xFF;
+HE_ADDR_1		EQU		(HE_ADDRESS >> .4)  & 0xFF;
+HE_ADDR_2		EQU		(HE_ADDRESS << .4)  & 0xFF;
 
+HE_TAIL_H_TIME	EQU		.2
+HE_TAIL_L_TIME	EQU		.62
 
-HE_HEAD_H_TIME	EQU		.3
-HE_HEAD_L_TIME	EQU		.27
-
-HE_DATA_T0		EQU		.3		; High
-HE_DATA_T1		EQU		.3		; Data
-HE_DATA_T2		EQU		.3		; High
-HE_DATA_T3		EQU		.4		; ~Data
-HE_DATA_T4		EQU		.3		; High
-HE_DATA_T5		EQU		.3		; Low
-
-HE_TAIL_H_TIME	EQU		.3
-HE_TAIL_L_TIME	EQU		.99
+HE_DATA_T0		EQU		.2		; High
+HE_DATA_T1		EQU		.4		; Data
+HE_DATA_T2		EQU		.2		; Low
 
 ALL_LEDS_ON		EQU		0x3f
 ALL_LEDS_OFF	EQU		0x00
@@ -65,7 +57,7 @@ HE_STATE	res 1		; Home Easy Transmit State Machine
 HE_COUNT	res 1		; Home Easy Transmit Counter (within a state)
 HE_REPEAT	res 1		; Home Easy Command Repeat Counter (also triggers start of sent)
 HE_BIT		res	1		; Home Easy Bit Counter
-HE_SHIFT	res 4		; Home Easy Shift Register
+HE_SHIFT	res 3		; Home Easy Shift Register
 
 
 CMD_STATE	res 1		; command state machine
@@ -441,43 +433,41 @@ HE_STATE_IDLE	BCF		HE_PORT, HE_PBIT
 		
 
 HE_STATE_INIT	BSF		HE_PORT, HE_PBIT
-				MOVLW	HE_HEAD_H_TIME
-				MOVWF	HE_COUNT
-				MOVLW	HE_STATE_HEAD_H
-				MOVWF	HE_STATE
-				RETURN
 
-
-HE_STATE_HEAD_H	DECFSZ	HE_COUNT, F
-				RETURN
-				BCF		HE_PORT, HE_PBIT
-				MOVLW	HE_HEAD_L_TIME
-				MOVWF	HE_COUNT
-				MOVLW	HE_STATE_HEAD_L
-				MOVWF	HE_STATE
-				RETURN
-
-
-HE_STATE_HEAD_L	DECFSZ	HE_COUNT, F
-				RETURN
-				BSF		HE_PORT, HE_PBIT		
-				MOVLW	0x20		; number of data bits to send
+				MOVLW	0x18		; number of data bits to send
 				MOVWF	HE_BIT
 
 				MOVLW	HE_ADDR_0		
 				MOVWF	HE_SHIFT
 				MOVLW	HE_ADDR_1		
 				MOVWF	HE_SHIFT+1
-				MOVLW	HE_ADDR_2		
-				MOVWF	HE_SHIFT+2
+				;; convert command to energenie format
+				;; IR:
+				;;    bit 4 = on/off
+                ;;    bit 3 = device 3
+                ;;    bit 2 = device 2
+                ;;    bit 3 = device 1
+                ;;    bit 0 = device 0
+				;; Energenie:
+				;;    bits 7..4 = last 4 bits of address
+				;;    bit 3 = not device 2 
+				;;    bit 2 = not device 1 
+				;;    bit 1 = not device 0 
+				;;    bit 0 = on/off
 
-									; bits 7-6 are address
-									; bit 5 is the group bit
-									; bit 4 is the command
-									; bits 3-0 are the device
-				MOVLW	HE_ADDR_3		
-				IORWF	HE_COMMAND,W
-				MOVWF	HE_SHIFT+3
+				;; the old home easy code just mapped the bits directly	
+				;; IORWF	HE_COMMAND,W
+
+				MOVLW	HE_ADDR_2
+				BTFSC	HE_COMMAND, 4	; test the on/off bit being 1
+                IORLW   0x01			; OR in to bit 0
+				BTFSS	HE_COMMAND, 2	; test the device 2 bit being 0
+                IORLW   0x02			; OR in to bit 1
+				BTFSS	HE_COMMAND, 1	; test the device 1 bit being 0
+                IORLW   0x04			; OR in to bit 2
+				BTFSS	HE_COMMAND, 0	; test the device 0 bit being 0
+                IORLW   0x08			; OR in to bit 3
+				MOVWF	HE_SHIFT+2
 
 				MOVLW	HE_DATA_T0
 				MOVWF	HE_COUNT
@@ -487,7 +477,10 @@ HE_STATE_HEAD_L	DECFSZ	HE_COUNT, F
 
 HE_STATE_DATA0	DECFSZ	HE_COUNT, F
 				RETURN
+				BTFSS	HE_SHIFT,7
 				BCF		HE_PORT, HE_PBIT
+				BTFSC	HE_SHIFT,7
+				BSF		HE_PORT, HE_PBIT
 				MOVLW	HE_DATA_T1
 				MOVWF	HE_COUNT
 				MOVLW	HE_STATE_DATA1
@@ -496,9 +489,6 @@ HE_STATE_DATA0	DECFSZ	HE_COUNT, F
 
 HE_STATE_DATA1	DECFSZ	HE_COUNT, F
 				RETURN
-				BTFSS	HE_SHIFT,7
-				BSF		HE_PORT, HE_PBIT
-				BTFSC	HE_SHIFT,7
 				BCF		HE_PORT, HE_PBIT
 				MOVLW	HE_DATA_T2
 				MOVWF	HE_COUNT
@@ -508,38 +498,7 @@ HE_STATE_DATA1	DECFSZ	HE_COUNT, F
 
 HE_STATE_DATA2	DECFSZ	HE_COUNT, F
 				RETURN
-				BCF		HE_PORT, HE_PBIT
-				MOVLW	HE_DATA_T3
-				MOVWF	HE_COUNT
-				MOVLW	HE_STATE_DATA3
-				MOVWF	HE_STATE
-				RETURN
-
-HE_STATE_DATA3	DECFSZ	HE_COUNT, F
-				RETURN
-				BTFSS	HE_SHIFT,7
-				BCF		HE_PORT, HE_PBIT
-				BTFSC	HE_SHIFT,7
 				BSF		HE_PORT, HE_PBIT
-				MOVLW	HE_DATA_T4
-				MOVWF	HE_COUNT
-				MOVLW	HE_STATE_DATA4
-				MOVWF	HE_STATE
-				RETURN
-
-HE_STATE_DATA4	DECFSZ	HE_COUNT, F
-				RETURN
-				BCF		HE_PORT, HE_PBIT
-				MOVLW	HE_DATA_T5
-				MOVWF	HE_COUNT
-				MOVLW	HE_STATE_DATA5
-				MOVWF	HE_STATE
-				RETURN
-
-HE_STATE_DATA5	DECFSZ	HE_COUNT, F
-				RETURN
-				BSF		HE_PORT, HE_PBIT
-                RLF     HE_SHIFT+3,F ; shift the shift register by one bit
                 RLF     HE_SHIFT+2,F
                 RLF     HE_SHIFT+1,F
                 RLF     HE_SHIFT,F
@@ -575,6 +534,8 @@ HE_STATE_TAIL_L	DECFSZ	HE_COUNT, F
 				MOVLW	HE_STATE_INIT
 				MOVWF	HE_STATE
 				RETURN
+
+
 
 ;-----------------------------------------------------------------------------
 ;
@@ -673,18 +634,18 @@ MAIN
 
 ;-----------------------------------------CALL THE COMMAND STATE MACHINE--
 
-                CALL    CMD_MACHINE
+;;                CALL    CMD_MACHINE
 
 ;-----------------------------------------POLL THE SERIAL DRIVER --
 ;; todo: should be OK to alternate calls
-                CALL    uart_int_tx
-                CALL    uart_int_rx
+;;                CALL    uart_int_tx
+;;                CALL    uart_int_rx
 
 ;-----------------------------------------------------SCAN DISPLAY EVERY 5MS--
 
-                DECF    SCAN_DELAY,F    ;Decrement scan delay counter
-                BTFSC   STATUS,Z        ;Only scan display if counter = 0
-                CALL    SCAN_DISP
+;;                DECF    SCAN_DELAY,F    ;Decrement scan delay counter
+;;                BTFSC   STATUS,Z        ;Only scan display if counter = 0
+;;                CALL    SCAN_DISP
 
 ;-------------------------------------------------------SYNC MAIN WITH TIMER--
 
